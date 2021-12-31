@@ -7,10 +7,11 @@ package org.archicontribs.modelrepository.actions;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
-import java.security.GeneralSecurityException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 import org.archicontribs.modelrepository.IModelRepositoryImages;
-import org.archicontribs.modelrepository.authentication.EncryptedCredentialsStorage;
+import org.archicontribs.modelrepository.ModelRepositoryPlugin;
 import org.archicontribs.modelrepository.authentication.ProxyAuthenticator;
 import org.archicontribs.modelrepository.authentication.UsernamePassword;
 import org.archicontribs.modelrepository.grafico.ArchiRepository;
@@ -20,6 +21,9 @@ import org.archicontribs.modelrepository.grafico.GraficoUtils;
 import org.archicontribs.modelrepository.grafico.IRepositoryListener;
 import org.archicontribs.modelrepository.merge.MergeConflictHandler;
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.equinox.security.storage.ISecurePreferences;
+import org.eclipse.equinox.security.storage.SecurePreferencesFactory;
+import org.eclipse.equinox.security.storage.StorageException;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.dialogs.ProgressMonitorDialog;
 import org.eclipse.jface.operation.IRunnableWithProgress;
@@ -82,19 +86,10 @@ public class RefreshModelAction extends AbstractModelAction {
                 return;
             }
             
-            // Check primary key set
-            if(!EncryptedCredentialsStorage.checkPrimaryKeySet()) {
-                return;
-            }
-
             // Get this before opening the progress dialog
             // UsernamePassword will be null if using SSH
-            UsernamePassword npw = getUsernamePassword();
-            // User cancelled on HTTP
-            if(npw == null && GraficoUtils.isHTTP(getRepository().getOnlineRepositoryURL())) {
-                return;
-            }
-
+            UsernamePassword npw = getUsernamePasswordFromSecurePreferences();
+            
             // Do main action with PM dialog
             Display.getCurrent().asyncExec(new Runnable() {
                 @Override
@@ -141,12 +136,46 @@ public class RefreshModelAction extends AbstractModelAction {
             });
             
         }
-        catch(GeneralSecurityException ex) {
-            displayCredentialsErrorDialog(ex);
-        }
         catch(Exception ex) {
             displayErrorDialog(Messages.RefreshModelAction_0, ex);
         }
+    }
+    
+    protected UsernamePassword getUsernamePasswordFromSecurePreferences() throws IOException, StorageException {
+        UsernamePassword npw = null;
+        
+        if(GraficoUtils.isHTTP(getRepository().getOnlineRepositoryURL())) {
+            // Get Secure Prefs root node
+            ISecurePreferences rootNode = SecurePreferencesFactory.getDefault();
+            // This is the coArchi node for all secure entries. We could clear it with coArchiNode.removeNode()
+            ISecurePreferences coArchiNode = rootNode.node(ModelRepositoryPlugin.PLUGIN_ID);
+            // This is the child node for this repository
+            ISecurePreferences repoNode = coArchiNode.node(URLEncoder.encode(getRepository().getOnlineRepositoryURL(), StandardCharsets.UTF_8));
+            
+            // Get user name
+            String username = repoNode.get("username", null);
+            
+            // This is how it would be stored elsewhere
+            if(username == null) {
+                repoNode.put("username", "UserName", true);
+                repoNode.flush();
+                username = repoNode.get("username", null);
+            }
+            
+            // Get password
+            String password = repoNode.get("password", null);
+            
+            // This is how it would be stored elsewhere
+            if(password == null) {
+                repoNode.put("password", "SecretKey", true);
+                repoNode.flush();
+                password = repoNode.get("password", null);
+            }
+            
+            npw = new UsernamePassword(username, password.toCharArray());
+        }
+
+        return npw;
     }
     
     protected int init() throws IOException, GitAPIException {
